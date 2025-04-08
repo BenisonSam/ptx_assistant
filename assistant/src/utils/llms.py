@@ -60,6 +60,8 @@ def create_hugging_face_model(config: AppConfig) -> tuple[BaseLLM, dict]:
     llm = TransformersModel(
         model_name=model_name,
         generation_kwargs=generation_kwargs,
+        quantization=settings["Quantization"] if settings["Quantization"] != "None" else None,
+        use_flash_attention=settings["Flash Attention"],
     )
 
     return llm, settings

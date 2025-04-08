@@ -59,6 +59,20 @@ chat_profiles:
     settings:
       - *model_settings
       - *default_settings
+      - type: Select
+        options:
+          id: "Quantization"
+          label: "Quantization"
+          values:
+            - "4bit"
+            - "8bit"
+            - "None"
+          initial_value: "None"
+      - type: Switch
+        options:
+          id: "Flash Attention"
+          label: "Flash Attention"
+          initial_value: false
     system_prompt: |
       You are a helpful assistant capable of helping with a variety of tasks and questions related to Bible translation. Always provide short and accurate response. If needed, format your responses in markdown for better readability.
     human_prompt: |
