@@ -74,7 +74,7 @@ class TransformersModel(LLM):
             self.use_flash_attention = False
 
         # Configure quantization if enabled
-        if self.quantization and torch.cuda.is_available():
+        if self.quantization and self.device == "cuda":
             log.info(f"Enabling {self.quantization} quantization...")
             bnb_config = BitsAndBytesConfig(
                 load_in_4bit=self.quantization == "4bit",
@@ -108,6 +108,8 @@ class TransformersModel(LLM):
             self.model.save_pretrained(self.model_path)
             # noinspection PyUnresolvedReferences
             self.tokenizer.save_pretrained(self.model_path)
+
+        print("MODEL LOADED: device:", self.device)
 
     def unload(self):
         # First, try to move model and tokenizer to CPU before deletion
