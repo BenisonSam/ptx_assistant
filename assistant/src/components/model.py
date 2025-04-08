@@ -22,6 +22,8 @@ class TransformersModel(LLM):
     model_name: str  # Required field
     model_path: Optional[str] = None
     device: str = "cuda" if torch.cuda.is_available() else "cpu"
+    quantization: Optional[Literal["4bit", "8bit", None]] = None
+    use_flash_attention: bool = False
 
     model: Optional[AutoModelForCausalLM] = None
     tokenizer: Optional[AutoTokenizer] = None
