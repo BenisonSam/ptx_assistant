@@ -3,7 +3,7 @@ import os
 import re
 from concurrent.futures import Future
 from threading import Thread
-from typing import Any, Dict, List, Tuple, Optional, Iterator, AsyncIterator
+from typing import Any, Dict, List, Tuple, Optional, Iterator, AsyncIterator, Literal
 
 import torch
 from langchain.callbacks.manager import CallbackManagerForLLMRun
@@ -11,7 +11,7 @@ from langchain.llms.base import LLM
 from langchain.schema.messages import AIMessage, BaseMessage
 from langchain_core.language_models import LanguageModelInput
 from langchain_core.messages import SystemMessage, HumanMessage, ToolMessage
-from transformers import AutoModelForCausalLM, AutoTokenizer, TextIteratorStreamer
+from transformers import AutoModelForCausalLM, AutoTokenizer, TextIteratorStreamer, BitsAndBytesConfig
 
 from src.logger import log
 
@@ -48,6 +48,8 @@ class TransformersModel(LLM):
             model_path: Optional[str] = None,
             model_kwargs: Optional[Dict[str, Any]] = None,
             generation_kwargs: Optional[Dict[str, Any]] = None,
+            quantization: Optional[Literal["4bit", "8bit", None]] = None,
+            use_flash_attention: bool = False,
             **kwargs: Any,
     ):
         super().__init__(model_name=model_name, **kwargs)
@@ -56,6 +58,8 @@ class TransformersModel(LLM):
         self.model_path = model_path or os.path.join("models", re.sub(r'[^a-zA-Z0-9\-/]', '_', model_name))
         self.model_kwargs = {**self.model_kwargs, **(model_kwargs or {})}
         self.generation_kwargs = {**self.generation_kwargs, **(generation_kwargs or {})}
+        self.quantization = quantization
+        self.use_flash_attention = use_flash_attention
         self._initialize_model()
 
     def _initialize_model(self):
@@ -63,6 +67,26 @@ class TransformersModel(LLM):
         if self.device == "cpu":
             self.model_kwargs["torch_dtype"] = torch.float32
             self.model_kwargs["device_map"] = None
+            # Disable quantization on CPU
+            self.quantization = None
+            self.use_flash_attention = False
+
+        # Configure quantization if enabled
+        if self.quantization and torch.cuda.is_available():
+            log.info(f"Enabling {self.quantization} quantization...")
+            bnb_config = BitsAndBytesConfig(
+                load_in_4bit=self.quantization == "4bit",
+                load_in_8bit=self.quantization == "8bit",
+                bnb_4bit_compute_dtype=torch.float16,
+                bnb_4bit_use_double_quant=True,
+                bnb_4bit_quant_type="nf4",
+            )
+            self.model_kwargs["quantization_config"] = bnb_config
+
+        # Configure flash attention if enabled
+        if self.use_flash_attention and torch.cuda.is_available():
+            log.info("Enabling flash attention...")
+            self.model_kwargs["attn_implementation"] = "flash_attention_2"
 
         # Download and save model if it doesn't exist
         get_model = not os.path.exists(self.model_path)
@@ -120,10 +144,10 @@ class TransformersModel(LLM):
     def _llm_type(self) -> str:
         return "streaming_transformers"
 
-    def _convert_messages_to_text(self, messages: List[BaseMessage]) -> str:
+    def _convert_messages_to_text(self, message_list: List[BaseMessage]) -> str:
         """Convert a list of messages to a single text string using the model's chat template."""
         formatted_messages = []
-        for message in messages:
+        for message in message_list:
             if isinstance(message, SystemMessage):
                 formatted_messages.append({"role": "system", "content": message.content})
             elif isinstance(message, HumanMessage):
@@ -140,6 +164,7 @@ class TransformersModel(LLM):
             add_generation_prompt=True
         )
 
+    # noinspection PyUnusedLocal
     def _stream_generate(
             self,
             prompt: str,
@@ -205,7 +230,7 @@ class TransformersModel(LLM):
 
     def stream(
             self,
-            input: LanguageModelInput,
+            lm_input: LanguageModelInput,
             stop: Optional[List[str]] = None,
             run_manager: Optional[CallbackManagerForLLMRun] = None,
             **kwargs: Any,
@@ -213,7 +238,7 @@ class TransformersModel(LLM):
         """Stream the tokens of the response as they are generated.
 
         Args:
-            input: Either a string prompt or a list of messages.
+            lm_input: Either a string prompt or a list of messages.
             stop: A list of strings to stop generation when encountered.
             run_manager: Callback manager for LLM.
             **kwargs: Additional arguments to pass to call.
@@ -222,7 +247,7 @@ class TransformersModel(LLM):
             The token strings as they are generated.
         """
         # Convert messages to text
-        prompt = self._convert_input(input)
+        prompt = self._convert_input(lm_input)
         prompt = self._convert_messages_to_text(prompt.to_messages())
 
         # Get stream components
@@ -346,7 +371,7 @@ class TransformersModel(LLM):
 
     async def astream(
             self,
-            input: LanguageModelInput,
+            lm_input: LanguageModelInput,
             stop: Optional[List[str]] = None,
             run_manager: Optional[CallbackManagerForLLMRun] = None,
             **kwargs: Any,
@@ -354,7 +379,7 @@ class TransformersModel(LLM):
         """Asynchronously stream the tokens of the response as they are generated.
 
         Args:
-            input: Either a string prompt or a list of messages.
+            lm_input: Either a string prompt or a list of messages.
             stop: A list of strings to stop generation when encountered.
             run_manager: Callback manager for LLM.
             **kwargs: Additional arguments to pass to call.
@@ -363,7 +388,7 @@ class TransformersModel(LLM):
             The token strings as they are generated.
         """
         # Convert messages to text
-        prompt = self._convert_input(input)
+        prompt = self._convert_input(lm_input)
         prompt = self._convert_messages_to_text(prompt.to_messages())
 
         async for token in self._astream_generate(prompt, run_manager, **kwargs):
@@ -380,6 +405,9 @@ if __name__ == "__main__":
         # model_name="Qwen/Qwen2.5-1.5B-Instruct",
         # model_name="deepseek-ai/deepseek-coder-1.3b-instruct",
         # model_name="microsoft/DialoGPT-large",
+        # Example with quantization and flash attention
+        # quantization="4bit",  # Use 4-bit quantization (options: "4bit", "8bit", None)
+        # use_flash_attention=True,  # Enable flash attention for faster processing
     )
 
     # Example messages
@@ -398,6 +426,7 @@ if __name__ == "__main__":
     print("\n--- Example 1: Using callbacks for streaming ---")
 
     # Generate with callbacks streaming
+    # noinspection PyProtectedMember
     response = model(
         model._convert_messages_to_text(messages),
         callbacks=[StreamingStdOutCallbackHandler()]
@@ -415,10 +444,10 @@ if __name__ == "__main__":
 
 
     async def run_async_example():
-        full_response = ""
-        async for chunk in model.astream(messages):
-            print(chunk, end="", flush=True)
-            full_response += chunk
+        complete_response = ""
+        async for stream_chunk in model.astream(messages):
+            print(stream_chunk, end="", flush=True)
+            complete_response += stream_chunk
 
 
     # Run the async example
